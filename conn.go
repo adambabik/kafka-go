@@ -358,6 +358,18 @@ func (c *Conn) findCoordinator(request findCoordinatorRequestV0) (findCoordinato
 	return response, nil
 }
 
+func (c *Conn) FindCoordinator(id string) (Broker, error) {
+	resp, err := c.findCoordinator(findCoordinatorRequestV0{CoordinatorKey: id})
+	if err != nil {
+		return Broker{}, err
+	}
+	return Broker{
+		Host: resp.Coordinator.Host,
+		Port: int(resp.Coordinator.Port),
+		ID:   int(resp.Coordinator.NodeID),
+	}, nil
+}
+
 // heartbeat sends a heartbeat message required by consumer groups
 //
 // See http://kafka.apache.org/protocol.html#The_Messages_Heartbeat
@@ -462,6 +474,19 @@ func (c *Conn) listGroups(request listGroupsRequestV1) (listGroupsResponseV1, er
 	return response, nil
 }
 
+// ListGroups returns a list of all consumer group IDs.
+func (c *Conn) ListGroups() ([]string, error) {
+	resp, err := c.listGroups(listGroupsRequestV1{})
+	if err != nil {
+		return nil, err
+	}
+	groupIDs := make([]string, 0, len(resp.Groups))
+	for _, group := range resp.Groups {
+		groupIDs = append(groupIDs, group.GroupID)
+	}
+	return groupIDs, nil
+}
+
 // offsetCommit commits the specified topic partition offsets
 //
 // See http://kafka.apache.org/protocol.html#The_Messages_OffsetCommit
@@ -521,6 +546,38 @@ func (c *Conn) offsetFetch(request offsetFetchRequestV1) (offsetFetchResponseV1,
 	}
 
 	return response, nil
+}
+
+func (c *Conn) OffsetFetch(groupID string, topicPartitions map[string][]int) (map[string]map[int]int64, error) {
+	topics := make([]offsetFetchRequestV1Topic, 0, len(topicPartitions))
+	for topic, parts := range topicPartitions {
+		parts32 := make([]int32, 0, len(parts))
+		for _, partition := range parts {
+			parts32 = append(parts32, int32(partition))
+		}
+		topics = append(topics, offsetFetchRequestV1Topic{
+			Topic:      topic,
+			Partitions: parts32,
+		})
+	}
+
+	resp, err := c.offsetFetch(offsetFetchRequestV1{
+		GroupID: groupID,
+		Topics:  topics,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]map[int]int64)
+	for _, r := range resp.Responses {
+		item := make(map[int]int64)
+		for _, pr := range r.PartitionResponses {
+			item[int(pr.Partition)] = pr.Offset
+		}
+		result[r.Topic] = item
+	}
+	return result, nil
 }
 
 // syncGroup completes the handshake to join a consumer group
